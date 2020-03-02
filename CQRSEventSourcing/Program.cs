@@ -1,11 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace CQRSEventSourcing
 {
 	public class Person
 	{
-		private int Age { get; set; }
+		private int age { get; set; }
 		EventBroker broker;
 
 		public Person(EventBroker broker)
@@ -20,7 +21,7 @@ namespace CQRSEventSourcing
 			var ac = query as AgeQuery;
 			if (ac != null && ac.Target == this)
 			{
-				ac.Result = Age;
+				ac.Result = age;
 			}
 		}
 
@@ -29,7 +30,11 @@ namespace CQRSEventSourcing
 			var cac = command as ChangeAgeCommand;
 			if (cac != null && cac.Target == this)
 			{
-				Age = cac.Age;
+				if (cac.Register)
+				{
+					broker.AllEvents.Add(new AgeChangedEvent(this, age, cac.Age));
+				}				
+				age = cac.Age;
 			}
 		}
 	}
@@ -53,6 +58,17 @@ namespace CQRSEventSourcing
 			Queries?.Invoke(this, q);
 			return (T) q.Result;
 		}
+
+		public void UndoLast()
+		{
+			var e = AllEvents.LastOrDefault();
+			var ac = e as AgeChangedEvent;
+			if (ac != null)
+			{
+				Command(new ChangeAgeCommand(ac.Target, ac.OldValue) { Register = false });
+				AllEvents.Remove(e);
+			}
+		}
 	}
 
 	public class Query
@@ -67,6 +83,7 @@ namespace CQRSEventSourcing
 
 	public class Command : EventArgs
 	{
+		public bool Register = true;
 	}
 
 	public class ChangeAgeCommand : Command
@@ -85,6 +102,24 @@ namespace CQRSEventSourcing
 	{
 	}
 
+	public class AgeChangedEvent : Event
+	{
+		public Person Target;
+		public int OldValue, NewValue;
+
+		public AgeChangedEvent(Person target, int oldValue, int newValue)
+		{
+			Target = target;
+			OldValue = oldValue;
+			NewValue = newValue;
+		}
+
+		public override string ToString()
+		{
+			return $"Age changed from { OldValue } to { NewValue }";
+		}
+	}
+
 	class Program
 	{
 		static void Main(string[] args)
@@ -93,8 +128,24 @@ namespace CQRSEventSourcing
 			var p = new Person(eb);
 			eb.Command(new ChangeAgeCommand(p, 123));
 
-			int age = eb.Query<int>(new AgeQuery { Target = p });
+			foreach (var e in eb.AllEvents)
+			{
+				Console.WriteLine(e);
+			}
+
+			int age;
+			age = eb.Query<int>(new AgeQuery { Target = p });
 			Console.WriteLine(age);
+
+			eb.UndoLast();
+			foreach (var e in eb.AllEvents)
+			{
+				Console.WriteLine(e);
+			}
+
+			age = eb.Query<int>(new AgeQuery { Target = p });
+			Console.WriteLine(age);
+
 			Console.ReadLine();
 		}
 	}
